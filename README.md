@@ -1,43 +1,61 @@
 # 🐍 Snake Game - Terminal Edition
 
-A classic snake game implemented entirely in bash, rendered in your terminal using `tput` for drawing.
+A classic snake game implemented in pure Bash for your terminal!
 
-## Features
+## 🎮 How to Play
 
-- 🎮 Classic snake gameplay with smooth controls
-- 📺 Adaptive terminal rendering with tput
-- ⚡ Configurable game speed (fast/normal/slow)
-- 📐 Customizable board size
-- 🏆 Score tracking and snake length display
-- 🔄 Restart or quit after game over
-- 🎯 Win condition when snake fills the entire board
+- **Move**: Use `WASD` keys or Arrow keys
+- **Goal**: Eat the red food (●●) to grow longer and score points
+- **Avoid**: Don't hit the walls or your own tail!
+- **Quit**: Press `Q` to quit
+- **Restart**: Press `R` after Game Over
 
-## Requirements
-
-- Bash 4.0+
-- Terminal with Unicode support (for emoji display)
-- `tput` command (part of ncurses)
-
-## Usage
+## 🚀 Quick Start
 
 ```bash
-# Start with default settings
+# Make executable (if needed)
+chmod +x snake.sh
+
+# Run with defaults
 ./snake.sh
 
 # Fast-paced game
 ./snake.sh --speed fast
 
-# Custom board size (60x30)
-./snake.sh --size 60x30
+# Custom board size
+./snake.sh --size 60x25
 
-# Slow speed with smaller board
-./snake.sh -s slow -S 30x20
-
-# Show help
-./snake.sh --help
+# Combine options
+./snake.sh --speed slow --size 50x30
 ```
 
-## Controls
+## 📋 Command Line Options
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--speed fast` | Fast game (50ms delay) | normal |
+| `--speed normal` | Normal game (100ms delay) | normal |
+| `--speed slow` | Slow game (200ms delay) | normal |
+| `--size WxH` | Board size (e.g., 60x25) | 40x20 |
+| `--help` | Show help message | - |
+
+## 🎯 Features
+
+- ✅ Adaptive terminal rendering with `tput`
+- ✅ Smooth keyboard input with arrow key support
+- ✅ Collision detection (walls and self)
+- ✅ Score tracking and snake length display
+- ✅ Restart functionality after Game Over
+- ✅ Clean terminal restoration on exit
+- ✅ Comprehensive input validation
+
+## 🛠️ Requirements
+
+- Bash 4.0+
+- Standard Unix utilities: `tput`, `stty`, `sleep`
+- Terminal with color support (recommended)
+
+## 📝 Controls
 
 | Key | Action |
 |-----|--------|
@@ -45,46 +63,9 @@ A classic snake game implemented entirely in bash, rendered in your terminal usi
 | `S` / `↓` | Move Down |
 | `A` / `←` | Move Left |
 | `D` / `→` | Move Right |
-| `R` | Restart (after game over) |
-| `Q` | Quit (after game over) |
+| `Q` | Quit Game |
+| `R` | Restart (after Game Over) |
 
-## Command-Line Options
+---
 
-```
-OPTIONS:
-  -s, --speed <speed>    Game speed: fast, normal, slow (default: normal)
-  -S, --size <WxH>       Board size in WxH format (default: 40x20)
-  -h, --help             Show this help message and exit
-  -v, --version          Show version information and exit
-```
-
-### Speed Settings
-
-| Speed | Delay | Description |
-|-------|-------|-------------|
-| `fast` | 50ms | Quick, challenging gameplay |
-| `normal` | 100ms | Balanced speed (default) |
-| `slow` | 200ms | Relaxed, easier to control |
-
-### Size Constraints
-
-- Minimum: 10x10
-- Maximum: 100x50
-- Format: `WIDTHxHEIGHT` (e.g., `40x20`, `60x30`)
-
-## Game Rules
-
-1. **Eat food** (🍎) to grow and earn points (+10 per food)
-2. **Avoid walls** - hitting the border ends the game
-3. **Avoid yourself** - colliding with your own tail is game over
-4. **Win** by filling the entire board with your snake
-
-## Display
-
-- 🟢 = Snake head
-- 🟩 = Snake body
-- 🍎 = Food
-
-## License
-
-MIT License - Feel free to modify and distribute.
+**Enjoy the game!** 🎉

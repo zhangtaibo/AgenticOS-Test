@@ -1,22 +1,15 @@
-# Byte-compiled / optimized / DLL files
-__pycache__/
-*.py[cod]
-*$py.class
+# Editor backups
+*~
+*.swp
+*.swo
 
 # OS files
 .DS_Store
 Thumbs.db
 
-# Editor files
-*.swp
-*.swo
-*~
-.vscode/
-.idea/
-
 # Logs
 *.log
 
 # Temporary files
-*.tmp
-*.bak
+tmp/
+temp/
