@@ -1,15 +1,23 @@
-# Editor backups
+# Snake Game .gitignore
+
+# Game state files
+*.state
+*.save
+
+# Temporary files
+*.tmp
+*.temp
 *~
-*.swp
-*.swo
+
+# Logs
+*.log
 
 # OS files
 .DS_Store
 Thumbs.db
 
-# Logs
-*.log
-
-# Temporary files
-tmp/
-temp/
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo

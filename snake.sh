@@ -1,421 +1,590 @@
-#!/bin/bash
-#
-# Snake Game - A terminal-based snake game
-# Play with WASD or arrow keys, eat food, grow longer, avoid walls and yourself!
-#
-
+#!/usr/bin/env bash
 set -euo pipefail
 
-# ============================================================================
-# Global Variables
-# ============================================================================
+# =============================================================================
+# Snake Game - Terminal Snake Game
+# A classic snake game implemented in pure bash
+# =============================================================================
+
+# --- Constants ---
+readonly SCRIPT_NAME="$(basename "$0")"
+readonly VERSION="1.0.0"
+
+# Default game settings
+DEFAULT_WIDTH=40
+DEFAULT_HEIGHT=20
+DEFAULT_SPEED="normal"
+
+# Speed settings (delay in milliseconds)
+declare -A SPEED_DELAY=(
+  ["fast"]=50
+  ["normal"]=100
+  ["slow"]=200
+)
+
+# Direction constants
+readonly DIR_UP="up"
+readonly DIR_DOWN="down"
+readonly DIR_LEFT="left"
+readonly DIR_RIGHT="right"
+
+# Game state variables
 declare -a SNAKE_X=()
 declare -a SNAKE_Y=()
-declare -i DIRECTION=0  # 0=right, 1=down, 2=left, 3=up
 declare -i FOOD_X=0
 declare -i FOOD_Y=0
+declare -i DIRECTION="$DIR_RIGHT"
+declare -i NEXT_DIRECTION="$DIR_RIGHT"
 declare -i SCORE=0
-declare -i WIDTH=40
-declare -i HEIGHT=20
-declare -i SPEED=100  # milliseconds
-declare -i GAME_RUNNING=1
-declare -i INITIAL_LENGTH=3
+declare -i GAME_WIDTH=$DEFAULT_WIDTH
+declare -i GAME_HEIGHT=$DEFAULT_HEIGHT
+declare -i GAME_SPEED="${SPEED_DELAY[$DEFAULT_SPEED]}"
+declare -i GAME_OVER=0
+declare -i GAME_RUNNING=0
 
-# Terminal settings backup
-declare -st OLD_STTY
+# Terminal state
+declare -i TERM_WIDTH=0
+declare -i TERM_HEIGHT=0
 
-# ============================================================================
-# Cleanup and Restore Terminal
-# ============================================================================
-cleanup() {
-    tput cnorm  # Show cursor
-    tput sgr0   # Reset all attributes
-    stty "$OLD_STTY" 2>/dev/null || true
-    clear
-}
+# =============================================================================
+# Utility Functions
+# =============================================================================
 
-trap cleanup EXIT INT TERM
-
-# ============================================================================
-# Usage and Help
-# ============================================================================
+# Print usage information
 usage() {
-    cat <<EOF
-Snake Game - Terminal Edition
+  cat >&2 <<EOF
+$SCRIPT_NAME v$VERSION - Terminal Snake Game
 
-Usage: $(basename "$0") [OPTIONS]
+Usage: $SCRIPT_NAME [OPTIONS]
 
-Options:
-  --speed SPEED     Set game speed: fast (50ms), normal (100ms), slow (200ms)
-                    Default: normal
-  --size WxH        Set game board size (e.g., --size 60x25)
-                    Default: 40x20
-  --help            Show this help message
+A classic snake game played in the terminal. Control the snake to eat food
+and grow longer without hitting walls or yourself.
 
 Controls:
-  W or ↑           Move up
-  S or ↓           Move down
-  A or ←           Move left
-  D or →           Move right
-  
-  R                Restart game (after Game Over)
-  Q                Quit game
+  W, ↑  - Move up
+  S, ↓  - Move down
+  A, ←  - Move left
+  D, →  - Move right
+  R     - Restart (after game over)
+  Q     - Quit
+
+Options:
+  --speed <fast|normal|slow>  Set game speed (default: normal)
+  --size <WxH>                Set game size, e.g., 40x20 (default: ${DEFAULT_WIDTH}x${DEFAULT_HEIGHT})
+  -h, --help                  Show this help message
 
 Examples:
-  $(basename "$0")                    # Start with defaults
-  $(basename "$0") --speed fast       # Fast-paced game
-  $(basename "$0") --size 60x25       # Larger board
-  $(basename "$0") --speed slow --size 50x30
+  $SCRIPT_NAME                         # Start with default settings
+  $SCRIPT_NAME --speed fast            # Fast-paced game
+  $SCRIPT_NAME --size 60x30            # Larger game area
+  $SCRIPT_NAME --speed slow --size 30x20
 
 EOF
-    exit 0
+  exit "${1:-0}"
 }
 
-# ============================================================================
-# Parse Command Line Arguments
-# ============================================================================
-parse_args() {
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            --speed)
-                if [[ -z "${2:-}" ]]; then
-                    echo "Error: --speed requires an argument (fast/normal/slow)" >&2
-                    exit 1
-                fi
-                case "$2" in
-                    fast)   SPEED=50 ;;
-                    normal) SPEED=100 ;;
-                    slow)   SPEED=200 ;;
-                    *)
-                        echo "Error: Invalid speed '$2'. Use: fast, normal, slow" >&2
-                        exit 1
-                        ;;
-                esac
-                shift 2
-                ;;
-            --size)
-                if [[ -z "${2:-}" ]]; then
-                    echo "Error: --size requires an argument (WxH)" >&2
-                    exit 1
-                fi
-                if [[ ! "$2" =~ ^[0-9]+x[0-9]+$ ]]; then
-                    echo "Error: Invalid size format '$2'. Use: WxH (e.g., 40x20)" >&2
-                    exit 1
-                fi
-                WIDTH="${2%x*}"
-                HEIGHT="${2#*x}"
-                if (( WIDTH < 10 || HEIGHT < 10 )); then
-                    echo "Error: Minimum size is 10x10" >&2
-                    exit 1
-                fi
-                shift 2
-                ;;
-            --help)
-                usage
-                ;;
-            *)
-                echo "Error: Unknown option '$1'" >&2
-                echo "Use --help for usage information" >&2
-                exit 1
-                ;;
-        esac
-    done
+# Log error message
+log_error() {
+  printf "\033[0;31m[ERROR]\033[0m %s\n" "$*" >&2
 }
 
-# ============================================================================
-# Initialize Game State
-# ============================================================================
+# Log info message
+log_info() {
+  printf "\033[0;32m[INFO]\033[0m %s\n" "$*"
+}
+
+# =============================================================================
+# Terminal Setup and Cleanup
+# =============================================================================
+
+# Save original terminal settings
+declare ORIG_TTY_SETTINGS=""
+
+# Initialize terminal for game
+init_terminal() {
+  # Save current terminal settings
+  ORIG_TTY_SETTINGS="$(stty -g)"
+  
+  # Get terminal dimensions
+  TERM_WIDTH="$(tput cols)"
+  TERM_HEIGHT="$(tput lines)"
+  
+  # Check minimum terminal size
+  local required_width=$((GAME_WIDTH + 4))
+  local required_height=$((GAME_HEIGHT + 6))
+  
+  if [[ $TERM_WIDTH -lt $required_width ]] || [[ $TERM_HEIGHT -lt $required_height ]]; then
+    log_error "Terminal too small! Required: ${required_width}x${required_height}, Current: ${TERM_WIDTH}x${TERM_HEIGHT}"
+    log_error "Please resize your terminal and try again."
+    cleanup
+    exit 1
+  fi
+  
+  # Set terminal to raw mode (no echo, no line buffering)
+  stty -echo -icanon -isig
+  
+  # Hide cursor
+  tput civis
+  
+  # Clear screen
+  tput clear
+}
+
+# Restore terminal to original state
+cleanup() {
+  local exit_code=$?
+  
+  # Restore terminal settings
+  if [[ -n "$ORIG_TTY_SETTINGS" ]]; then
+    stty "$ORIG_TTY_SETTINGS" 2>/dev/null || true
+  fi
+  
+  # Show cursor
+  tput cnorm 2>/dev/null || true
+  
+  # Reset colors
+  tput sgr0 2>/dev/null || true
+  
+  if [[ $exit_code -ne 0 ]]; then
+    echo "" >&2
+    log_error "$SCRIPT_NAME exited with code $exit_code"
+  fi
+  
+  exit "$exit_code"
+}
+
+# Set up trap for cleanup
+trap cleanup EXIT INT TERM
+
+# =============================================================================
+# Game Logic Functions
+# =============================================================================
+
+# Initialize game state
 init_game() {
-    SCORE=0
-    DIRECTION=0  # Start moving right
-    GAME_RUNNING=1
-    
-    # Initialize snake in the middle of the board
-    local start_x=$((WIDTH / 2))
-    local start_y=$((HEIGHT / 2))
-    
-    SNAKE_X=()
-    SNAKE_Y=()
-    
-    for ((i = 0; i < INITIAL_LENGTH; i++)); do
-        SNAKE_X+=($((start_x - i)))
-        SNAKE_Y+=($start_y)
-    done
-    
-    spawn_food
+  # Reset snake to center of the board
+  SNAKE_X=()
+  SNAKE_Y=()
+  
+  local start_x=$((GAME_WIDTH / 2))
+  local start_y=$((GAME_HEIGHT / 2))
+  
+  # Initial snake length of 3
+  for i in 0 1 2; do
+    SNAKE_X+=($((start_x - i)))
+    SNAKE_Y+=($start_y)
+  done
+  
+  # Reset game state
+  DIRECTION="$DIR_RIGHT"
+  NEXT_DIRECTION="$DIR_RIGHT"
+  SCORE=0
+  GAME_OVER=0
+  GAME_RUNNING=1
+  
+  # Spawn initial food
+  spawn_food
 }
 
-# ============================================================================
-# Spawn Food at Random Location
-# ============================================================================
-spawn_food() {
-    local valid=0
-    local fx fy
-    
-    while (( valid == 0 )); do
-        fx=$(( (RANDOM % (WIDTH - 2)) + 1 ))
-        fy=$(( (RANDOM % (HEIGHT - 2)) + 1 ))
-        
-        # Check if food spawns on snake body
-        valid=1
-        for ((i = 0; i < ${#SNAKE_X[@]}; i++)); do
-            if (( SNAKE_X[i] == fx && SNAKE_Y[i] == fy )); then
-                valid=0
-                break
-            fi
-        done
-    done
-    
-    FOOD_X=$fx
-    FOOD_Y=$fy
-}
-
-# ============================================================================
-# Draw Game Board
-# ============================================================================
+# Draw the game board
 draw_board() {
-    # Move cursor to home position
-    tput cup 0 0
+  # Move cursor to top-left
+  tput cup 0 0
+  
+  # Draw top border and score
+  printf "\033[0;36m┌"
+  for ((i = 0; i < GAME_WIDTH; i++)); do
+    printf "─"
+  done
+  printf "─┐\033[0m\n"
+  
+  # Score panel
+  printf "\033[0;36m│\033[0m  Score: \033[0;33m%-6d\033[0m  |  Length: \033[0;33m%-4d\033[0m  |  Speed: \033[0;33m%-6s\033[0m  \033[0;36m│\033[0m\n" \
+    "$SCORE" "${#SNAKE_X[@]}" "$DEFAULT_SPEED"
+  
+  printf "\033[0;36m├"
+  for ((i = 0; i < GAME_WIDTH; i++)); do
+    printf "─"
+  done
+  printf "─┤\033[0m\n"
+  
+  # Draw game area
+  for ((y = 0; y < GAME_HEIGHT; y++)); do
+    printf "\033[0;36m│\033[0m"
     
-    # Draw top border
-    tput setaf 7  # White
-    printf "┌"
-    for ((x = 1; x <= WIDTH; x++)); do
-        printf "──"
-    done
-    printf "┐\n"
-    
-    # Draw game area
-    for ((y = 1; y <= HEIGHT; y++)); do
-        printf "│"
-        for ((x = 1; x <= WIDTH; x++)); do
-            local drawn=0
-            
-            # Check if this is the snake head
-            if (( SNAKE_X[0] == x && SNAKE_Y[0] == y )); then
-                tput setaf 2  # Green
-                printf "██"
-                drawn=1
-            fi
-            
-            # Check if this is snake body
-            if (( drawn == 0 )); then
-                for ((i = 1; i < ${#SNAKE_X[@]}; i++)); do
-                    if (( SNAKE_X[i] == x && SNAKE_Y[i] == y )); then
-                        tput setaf 3  # Yellow
-                        printf "▓▓"
-                        drawn=1
-                        break
-                    fi
-                done
-            fi
-            
-            # Check if this is food
-            if (( drawn == 0 && FOOD_X == x && FOOD_Y == y )); then
-                tput setaf 1  # Red
-                printf "●●"
-                drawn=1
-            fi
-            
-            # Empty space
-            if (( drawn == 0 )); then
-                tput setaf 8  # Dark gray
-                printf "  "
-            fi
-        done
-        tput setaf 7
-        printf "│\n"
+    for ((x = 0; x < GAME_WIDTH; x++)); do
+      local cell=" "
+      local color=""
+      
+      # Check if this is the snake head
+      if [[ ${SNAKE_X[0]} -eq $x ]] && [[ ${SNAKE_Y[0]} -eq $y ]]; then
+        cell="@"
+        color="\033[0;32m"  # Green for head
+      # Check if this is snake body
+      elif is_snake_body "$x" "$y"; then
+        cell="o"
+        color="\033[0;32m"  # Green for body
+      # Check if this is food
+      elif [[ $FOOD_X -eq $x ]] && [[ $FOOD_Y -eq $y ]]; then
+        cell="*"
+        color="\033[0;31m"  # Red for food
+      fi
+      
+      if [[ -n "$color" ]]; then
+        printf "${color}%s\033[0m" "$cell"
+      else
+        printf "%s" "$cell"
+      fi
     done
     
-    # Draw bottom border
-    printf "└"
-    for ((x = 1; x <= WIDTH; x++)); do
-        printf "──"
-    done
-    printf "┘\n"
-    
-    # Draw score panel
-    tput setaf 6  # Cyan
-    printf "Score: %-5d  Length: %-5d  Speed: %dms\n" "$SCORE" "${#SNAKE_X[@]}" "$SPEED"
-    tput setaf 7
-    printf "Controls: W/A/S/D or Arrow Keys | Q to Quit\n"
+    printf "\033[0;36m│\033[0m\n"
+  done
+  
+  # Draw bottom border
+  printf "\033[0;36m└"
+  for ((i = 0; i < GAME_WIDTH; i++)); do
+    printf "─"
+  done
+  printf "─┘\033[0m\n"
+  
+  # Controls hint
+  printf "\033[0;37mControls: WASD/Arrows to move | Q to quit\033[0m\n"
+  
+  # Flush output
+  tput flush
 }
 
-# ============================================================================
-# Handle User Input
-# ============================================================================
+# Check if position is snake body (not head)
+is_snake_body() {
+  local check_x=$1
+  local check_y=$2
+  
+  for ((i = 1; i < ${#SNAKE_X[@]}; i++)); do
+    if [[ ${SNAKE_X[$i]} -eq $check_x ]] && [[ ${SNAKE_Y[$i]} -eq $check_y ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Check if position is any part of snake
+is_snake() {
+  local check_x=$1
+  local check_y=$2
+  
+  for ((i = 0; i < ${#SNAKE_X[@]}; i++)); do
+    if [[ ${SNAKE_X[$i]} -eq $check_x ]] && [[ ${SNAKE_Y[$i]} -eq $check_y ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Spawn food at random position (not on snake)
+spawn_food() {
+  local attempts=0
+  local max_attempts=$((GAME_WIDTH * GAME_HEIGHT))
+  
+  while [[ $attempts -lt $max_attempts ]]; do
+    FOOD_X=$((RANDOM % GAME_WIDTH))
+    FOOD_Y=$((RANDOM % GAME_HEIGHT))
+    
+    # Check if food spawned on snake
+    if ! is_snake "$FOOD_X" "$FOOD_Y"; then
+      return 0
+    fi
+    
+    ((attempts++))
+  done
+  
+  # Fallback: find first empty cell
+  for ((y = 0; y < GAME_HEIGHT; y++)); do
+    for ((x = 0; x < GAME_WIDTH; x++)); do
+      if ! is_snake "$x" "$y"; then
+        FOOD_X=$x
+        FOOD_Y=$y
+        return 0
+      fi
+    done
+  done
+}
+
+# Handle keyboard input
 handle_input() {
-    local key=""
+  local key=""
+  
+  # Read key with timeout (non-blocking)
+  if read -rsn1 -t 0.01 key 2>/dev/null; then
+    # Handle escape sequences (arrow keys)
+    if [[ "$key" == $'\x1b' ]]; then
+      read -rsn2 -t 0.01 key 2>/dev/null || true
+      case "$key" in
+        "[A") key="w" ;;  # Up arrow
+        "[B") key="s" ;;  # Down arrow
+        "[C") key="d" ;;  # Right arrow
+        "[D") key="a" ;;  # Left arrow
+        *) key="" ;;
+      esac
+    fi
     
-    # Read a single character with timeout
-    if read -rsn1 -t 0.01 key 2>/dev/null; then
-        # Handle escape sequences for arrow keys
-        if [[ "$key" == $'\x1b' ]]; then
-            if read -rsn2 -t 0.01 key 2>/dev/null; then
-                key="$key"
-            fi
-        fi
-        
+    # Convert to lowercase
+    key="${key,,}"
+    
+    # Process input
+    case "$key" in
+      w|a|s|d)
+        # Prevent 180-degree turns
         case "$key" in
-            w|W|$'\x1b[A')  # Up
-                if (( DIRECTION != 3 )); then
-                    DIRECTION=0
-                fi
-                ;;
-            d|D|$'\x1b[C')  # Right
-                if (( DIRECTION != 0 )); then
-                    DIRECTION=1
-                fi
-                ;;
-            s|S|$'\x1b[B')  # Down
-                if (( DIRECTION != 0 )); then
-                    DIRECTION=2
-                fi
-                ;;
-            a|A|$'\x1b[D')  # Left
-                if (( DIRECTION != 1 )); then
-                    DIRECTION=3
-                fi
-                ;;
-            q|Q)
-                GAME_RUNNING=0
-                echo "Game quit by user!"
-                exit 0
-                ;;
+          w) [[ "$DIRECTION" != "$DIR_DOWN" ]] && NEXT_DIRECTION="$DIR_UP" ;;
+          s) [[ "$DIRECTION" != "$DIR_UP" ]] && NEXT_DIRECTION="$DIR_DOWN" ;;
+          a) [[ "$DIRECTION" != "$DIR_RIGHT" ]] && NEXT_DIRECTION="$DIR_LEFT" ;;
+          d) [[ "$DIRECTION" != "$DIR_LEFT" ]] && NEXT_DIRECTION="$DIR_RIGHT" ;;
         esac
-    fi
-}
-
-# ============================================================================
-# Move Snake
-# ============================================================================
-move_snake() {
-    local head_x=${SNAKE_X[0]}
-    local head_y=${SNAKE_Y[0]}
-    local new_x=$head_x
-    local new_y=$head_y
-    
-    # Calculate new head position based on direction
-    case $DIRECTION in
-        0) ((new_x++)) ;;  # Right
-        1) ((new_y++)) ;;  # Down
-        2) ((new_x--)) ;;  # Left
-        3) ((new_y--)) ;;  # Up
-    esac
-    
-    # Insert new head
-    SNAKE_X=("$new_x" "${SNAKE_X[@]}")
-    SNAKE_Y=("$new_y" "${SNAKE_Y[@]}")
-    
-    # Check if food was eaten
-    if (( new_x == FOOD_X && new_y == FOOD_Y )); then
-        ((SCORE += 10))
-        spawn_food
-    else
-        # Remove tail if no food eaten
-        unset 'SNAKE_X[-1]'
-        unset 'SNAKE_Y[-1]'
-    fi
-}
-
-# ============================================================================
-# Check Collision with Walls or Self
-# ============================================================================
-check_collision() {
-    local head_x=${SNAKE_X[0]}
-    local head_y=${SNAKE_Y[0]}
-    
-    # Check wall collision
-    if (( head_x < 1 || head_x > WIDTH || head_y < 1 || head_y > HEIGHT )); then
+        ;;
+      q)
         GAME_RUNNING=0
-        return 1
+        GAME_OVER=2  # Quit flag
+        ;;
+      r)
+        if [[ $GAME_OVER -ne 0 ]]; then
+          init_game
+        fi
+        ;;
+    esac
+  fi
+}
+
+# Move the snake
+move_snake() {
+  # Update direction
+  DIRECTION="$NEXT_DIRECTION"
+  
+  # Calculate new head position
+  local new_head_x=${SNAKE_X[0]}
+  local new_head_y=${SNAKE_Y[0]}
+  
+  case "$DIRECTION" in
+    "$DIR_UP")    ((new_head_y--)) ;;
+    "$DIR_DOWN")  ((new_head_y++)) ;;
+    "$DIR_LEFT")  ((new_head_x--)) ;;
+    "$DIR_RIGHT") ((new_head_x++)) ;;
+  esac
+  
+  # Check for food collision before moving
+  local ate_food=0
+  if [[ $new_head_x -eq $FOOD_X ]] && [[ $new_head_y -eq $FOOD_Y ]]; then
+    ate_food=1
+    ((SCORE += 10))
+  fi
+  
+  # Move snake body (shift positions)
+  local snake_length=${#SNAKE_X[@]}
+  
+  if [[ $ate_food -eq 1 ]]; then
+    # Grow: add new head, keep tail
+    SNAKE_X=("$new_head_x" "${SNAKE_X[@]}")
+    SNAKE_Y=("$new_head_y" "${SNAKE_Y[@]}")
+    spawn_food
+  else
+    # Move: add new head, remove tail
+    # Shift array elements
+    for ((i = snake_length - 1; i > 0; i--)); do
+      SNAKE_X[$i]=${SNAKE_X[$((i-1))]}
+      SNAKE_Y[$i]=${SNAKE_Y[$((i-1))]}
+    done
+    SNAKE_X[0]=$new_head_x
+    SNAKE_Y[0]=$new_head_y
+  fi
+}
+
+# Check for collisions (wall or self)
+check_collision() {
+  local head_x=${SNAKE_X[0]}
+  local head_y=${SNAKE_Y[0]}
+  
+  # Wall collision
+  if [[ $head_x -lt 0 ]] || [[ $head_x -ge $GAME_WIDTH ]]; then
+    GAME_OVER=1
+    return
+  fi
+  
+  if [[ $head_y -lt 0 ]] || [[ $head_y -ge $GAME_HEIGHT ]]; then
+    GAME_OVER=1
+    return
+  fi
+  
+  # Self collision (check if head hits any body part)
+  for ((i = 1; i < ${#SNAKE_X[@]}; i++)); do
+    if [[ ${SNAKE_X[$i]} -eq $head_x ]] && [[ ${SNAKE_Y[$i]} -eq $head_y ]]; then
+      GAME_OVER=1
+      return
+    fi
+  done
+}
+
+# Display game over screen
+game_over() {
+  tput cup $((GAME_HEIGHT + 4)) 0
+  tput el
+  
+  if [[ $GAME_OVER -eq 2 ]]; then
+    printf "\033[0;33m╔════════════════════════════════════════╗\033[0m\n"
+    printf "\033[0;33m║\033[0m          Game Quit                    \033[0;33m║\033[0m\n"
+    printf "\033[0;33m╚════════════════════════════════════════╝\033[0m\n"
+  else
+    printf "\033[0;31m╔════════════════════════════════════════╗\033[0m\n"
+    printf "\033[0;31m║\033[0m          GAME OVER!                   \033[0;31m║\033[0m\n"
+    printf "\033[0;31m╚════════════════════════════════════════╝\033[0m\n"
+  fi
+  
+  printf "\n"
+  printf "  \033[0;33mFinal Score:\033[0m  %d\n" "$SCORE"
+  printf "  \033[0;33mSnake Length:\033[0m %d\n" "${#SNAKE_X[@]}"
+  printf "\n"
+  
+  if [[ $GAME_OVER -ne 2 ]]; then
+    printf "  Press \033[0;32mR\033[0m to restart or \033[0;31mQ\033[0m to quit: "
+  else
+    printf "  Thanks for playing!\n"
+  fi
+}
+
+# =============================================================================
+# Argument Parsing
+# =============================================================================
+
+parse_arguments() {
+  local speed_set=0
+  
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --speed)
+        if [[ -z "${2:-}" ]]; then
+          log_error "--speed requires a value (fast|normal|slow)"
+          usage 1
+        fi
+        local speed_val="${2,,}"
+        if [[ ! "$speed_val" =~ ^(fast|normal|slow)$ ]]; then
+          log_error "Invalid speed: $2. Must be fast, normal, or slow."
+          usage 1
+        fi
+        DEFAULT_SPEED="$speed_val"
+        GAME_SPEED="${SPEED_DELAY[$DEFAULT_SPEED]}"
+        shift 2
+        speed_set=1
+        ;;
+      --size)
+        if [[ -z "${2:-}" ]]; then
+          log_error "--size requires a value (WxH)"
+          usage 1
+        fi
+        local size_val="$2"
+        if [[ ! "$size_val" =~ ^[0-9]+x[0-9]+$ ]]; then
+          log_error "Invalid size format: $size_val. Use WxH (e.g., 40x20)"
+          usage 1
+        fi
+        GAME_WIDTH="${size_val%x*}"
+        GAME_HEIGHT="${size_val#*x}"
+        
+        # Validate dimensions
+        if [[ $GAME_WIDTH -lt 10 ]] || [[ $GAME_WIDTH -gt 100 ]]; then
+          log_error "Width must be between 10 and 100"
+          exit 1
+        fi
+        if [[ $GAME_HEIGHT -lt 10 ]] || [[ $GAME_HEIGHT -gt 50 ]]; then
+          log_error "Height must be between 10 and 50"
+          exit 1
+        fi
+        shift 2
+        ;;
+      -h|--help)
+        usage 0
+        ;;
+      -*)
+        log_error "Unknown option: $1"
+        usage 1
+        ;;
+      *)
+        log_error "Unexpected argument: $1"
+        usage 1
+        ;;
+    esac
+  done
+}
+
+# =============================================================================
+# Main Game Loop
+# =============================================================================
+
+main() {
+  # Parse command line arguments
+  parse_arguments "$@"
+  
+  # Initialize terminal
+  init_terminal
+  
+  # Initialize game state
+  init_game
+  
+  # Main game loop
+  while [[ $GAME_RUNNING -eq 1 ]]; do
+    # Draw the game board
+    draw_board
+    
+    # Handle input
+    handle_input
+    
+    # Check if game should continue
+    if [[ $GAME_RUNNING -eq 0 ]]; then
+      break
     fi
     
-    # Check self collision (skip head)
-    for ((i = 1; i < ${#SNAKE_X[@]}; i++)); do
-        if (( SNAKE_X[i] == head_x && SNAKE_Y[i] == head_y )); then
-            GAME_RUNNING=0
-            return 1
+    # Move snake
+    move_snake
+    
+    # Check collisions
+    check_collision
+    
+    # Check if game over
+    if [[ $GAME_OVER -ne 0 ]]; then
+      draw_board
+      game_over
+      
+      # Wait for restart or quit
+      while true; do
+        local key=""
+        if read -rsn1 -t 0.1 key 2>/dev/null; then
+          key="${key,,}"
+          
+          # Handle escape sequences
+          if [[ "$key" == $'\x1b' ]]; then
+            read -rsn2 -t 0.01 key 2>/dev/null || true
+          fi
+          
+          case "$key" in
+            r)
+              if [[ $GAME_OVER -ne 2 ]]; then
+                init_game
+                break
+              fi
+              ;;
+            q)
+              GAME_RUNNING=0
+              break
+              ;;
+          esac
         fi
-    done
+      done
+    fi
     
-    return 0
+    # Delay for game speed
+    local sleep_time
+    sleep_time=$(awk "BEGIN {printf \"%.3f\", $GAME_SPEED/1000}")
+    sleep "$sleep_time" 2>/dev/null || true
+  done
+  
+  # Final cleanup handled by trap
 }
 
-# ============================================================================
-# Game Over Screen
-# ============================================================================
-game_over() {
-    clear
-    tput cup $((HEIGHT / 2 - 2)) $(( (WIDTH * 2 + 4) / 2 - 10 ))
-    tput setaf 1  # Red
-    tput bold
-    echo "════════════════════════"
-    echo "       GAME OVER!       "
-    echo "════════════════════════"
-    tput sgr0
-    
-    tput cup $((HEIGHT / 2 + 1)) $(( (WIDTH * 2 + 4) / 2 - 8 ))
-    tput setaf 6  # Cyan
-    echo "Final Score: $SCORE"
-    echo "Snake Length: ${#SNAKE_X[@]}"
-    
-    tput cup $((HEIGHT / 2 + 4)) $(( (WIDTH * 2 + 4) / 2 - 12 ))
-    tput setaf 7
-    echo "Press [R] to restart or [Q] to quit"
-    
-    while true; do
-        read -rsn1 key
-        case "$key" in
-            r|R)
-                return 0  # Restart
-                ;;
-            q|Q)
-                echo "Thanks for playing!"
-                exit 0
-                ;;
-        esac
-    done
-}
-
-# ============================================================================
-# Main Game Loop
-# ============================================================================
-main() {
-    parse_args "$@"
-    
-    # Save terminal settings and configure for game
-    OLD_STTY=$(stty -g)
-    stty -echo -icanon min 0 time 0
-    tput civis  # Hide cursor
-    clear
-    
-    echo "🐍 Snake Game Starting..."
-    echo "Board: ${WIDTH}x${HEIGHT} | Speed: ${SPEED}ms"
-    sleep 1
-    
-    init_game
-    
-    # Main game loop
-    while (( GAME_RUNNING )); do
-        draw_board
-        handle_input
-        
-        if (( GAME_RUNNING )); then
-            move_snake
-            if ! check_collision; then
-                if ! game_over; then
-                    init_game
-                fi
-            fi
-        fi
-        
-        # Control game speed
-        sleep "0.0${SPEED}"
-    done
-}
-
-# ============================================================================
-# Entry Point
-# ============================================================================
+# Run main function with all arguments
 main "$@"
